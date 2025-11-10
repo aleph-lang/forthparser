@@ -1,0 +1,324 @@
+grammar;
+
+use aleph_syntax_tree::syntax::AlephTree as at;
+
+// The top-level program parser producing an AlephTree::ForthProgram
+pub Program: at = {
+    <defs:Definitions> => at::ForthProgram { definitions: defs },
+}
+
+// A non-empty vector of definitions
+pub Definitions: Vec<Box<at>> = {
+    <def:Definition> => vec![Box::new(def)],
+    <defs:Definitions> <def:Definition> => {
+        let mut v = defs;
+        v.push(Box::new(def));
+        v
+    }
+}
+
+// Single Forth definition (constant, variable, word, create, comment)
+pub Definition: at = {
+    WordDefinition,
+    ConstantDef,
+    VariableDef,
+    CreateDef,
+    Comment,
+}
+
+// Colon (word) definition parsing ": foo ... ;"
+WordDefinition: at = {
+    ":" <name:Ident> <body:WordBody> ";" => at::ForthDef {
+        name,
+        body,
+        is_immediate: false,
+    }
+}
+
+// Body of a word is sequence of WordItems
+pub WordBody: Vec<Box<at>> = {
+    <word:WordItem> => vec![Box::new(word)],
+    <body:WordBody> <word:WordItem> => {
+        let mut v = body;
+        v.push(Box::new(word));
+        v
+    }
+}
+
+// Single word items - produce AST nodes exactly matching AlephTree variants
+WordItem: at = {
+    Number,
+    StringLiteral,
+    Word,
+    StackOp,
+    ArithOp,
+    CompareOp,
+    LogicOp,
+    MemoryOp,
+    IOOp,
+    ControlStruct,
+    Comment,
+}
+
+// Constants of form "42 CONSTANT name"
+ConstantDef: at = {
+    <val:Number> "CONSTANT" <name:Ident> => at::ForthConst {
+        name,
+        value: Box::new(val),
+    }
+}
+
+// Variables of form "VARIABLE name"
+VariableDef: at = {
+    "VARIABLE" <name:Ident> => at::ForthVar { name }
+}
+
+// CREATE ... [AllotClause] [DOES> WordBody] optional AllotClause/DOS>
+CreateDef: at = {
+    "CREATE" <name:Ident> ";" => at::ForthCreate { name, allot_size: None, does_body: None },
+    "CREATE" <name:Ident> <allot:AllotClause> ";" => at::ForthCreate { name, allot_size: Some(Box::new(allot)), does_body: None },
+    "CREATE" <name:Ident> "DOES>" <body:WordBody> ";" => at::ForthCreate { name, allot_size: None, does_body: Some(body) },
+    "CREATE" <name:Ident> <allot:AllotClause> "DOES>" <body:WordBody> ";" => at::ForthCreate { name, allot_size: Some(Box::new(allot)), does_body: Some(body) },
+}
+
+// AllotClause is either a Number ALLOT or Number CELLS ALLOT
+AllotClause: at = {
+    <n:Number> "ALLOT" => n,
+    <n:Number> "CELLS" "ALLOT" => at::ForthCells,
+}
+
+// Number literal covers Int, Float, Hex
+Number: at = {
+    Integer,
+    Float,
+    HexNumber,
+}
+
+// Integer literal: at::Int variant
+Integer: at = r"-?[0-9]+" => at::Int { value: <>.to_string() };
+
+// Float literal: at::Float variant
+Float: at = r"-?[0-9]+\.[0-9]+" => at::Float { value: <>.to_string() };
+
+// HexNumber literal: at::ForthHex variant
+HexNumber: at = r"0[xX][0-9A-Fa-f]+" => at::ForthHex { value: <>.to_string() };
+
+// String literal for ." ... " and S" ... "
+StringLiteral: at = {
+    // Matches the entire ." string, including the dot and quote
+    r#"\." [^"]* ""# => {
+        let s = <>.to_string();
+        let text = s.trim_start_matches(".\"").trim_end_matches('"').trim();
+        at::ForthDotQuote { text: text.to_string() }
+    },
+    r#"S" [^"]* ""# => {
+        let s = <>.to_string();
+        let text = s.trim_start_matches("S\"").trim_end_matches('"').trim();
+        at::ForthSQuote { text: text.to_string() }
+    }
+}
+
+// Word references - must produce AlephTree::Ident variant
+Word: at = {
+    <name:Ident> => at::Ident { value: name }
+}
+
+// Stack operations produce matching variants
+StackOp: at = {
+    "DUP" => at::ForthDup,
+    "DROP" => at::ForthDrop,
+    "SWAP" => at::ForthSwap,
+    "OVER" => at::ForthOver,
+    "ROT" => at::ForthRot,
+    "-ROT" => at::ForthMinusRot,
+    "NIP" => at::ForthNip,
+    "TUCK" => at::ForthTuck,
+    "PICK" => at::ForthPick { depth: Box::new(at::Unit) },
+    "ROLL" => at::ForthRoll { depth: Box::new(at::Unit) },
+    "2DUP" => at::ForthTwoDup,
+    "2DROP" => at::ForthTwoDrop,
+    "2SWAP" => at::ForthTwoSwap,
+    "2OVER" => at::ForthTwoOver,
+    ">R" => at::ForthToR,
+    "R>" => at::ForthFromR,
+    "R@" => at::ForthRFetch,
+    "I" => at::ForthI,
+    "J" => at::ForthJ,
+    "LEAVE" => at::ForthLeave
+}
+
+// Arithmetic operations produce matching variants
+ArithOp: at = {
+    "+" => at::Add { number_expr1: Box::new(at::Unit), number_expr2: Box::new(at::Unit) },
+    "-" => at::Sub { number_expr1: Box::new(at::Unit), number_expr2: Box::new(at::Unit) },
+    "*" => at::Mul { number_expr1: Box::new(at::Unit), number_expr2: Box::new(at::Unit) },
+    "/" => at::Div { number_expr1: Box::new(at::Unit), number_expr2: Box::new(at::Unit) },
+    "MOD" => at::ForthMod,
+    "/MOD" => at::ForthDivMod,
+    "*/" => at::ForthMulDiv,
+    "*/MOD" => at::ForthMulDivMod,
+    "1+" => at::ForthOnePlus,
+    "1-" => at::ForthOneMinus,
+    "2*" => at::ForthTwoMul,
+    "2/" => at::ForthTwoDiv,
+    "ABS" => at::ForthAbs,
+    "NEGATE" => at::ForthNegate,
+    "MIN" => at::ForthMin,
+    "MAX" => at::ForthMax
+}
+
+// Comparison operators
+CompareOp: at = {
+    "=" => at::Eq { expr1: Box::new(at::Unit), expr2: Box::new(at::Unit) },
+    "<>" => at::ForthNotEq,
+    "<" => at::ForthLessThan,
+    ">" => at::ForthGreater,
+    "<=" => at::LE { expr1: Box::new(at::Unit), expr2: Box::new(at::Unit) },
+    ">=" => at::ForthGreaterEq,
+    "0=" => at::ForthZeroEq,
+    "0<>" => at::ForthZeroNotEq,
+    "0<" => at::ForthZeroLess,
+    "0>" => at::ForthZeroGreater
+}
+
+// Logic operators
+LogicOp: at = {
+    "AND" => at::And { bool_expr1: Box::new(at::Unit), bool_expr2: Box::new(at::Unit) },
+    "OR" => at::Or { bool_expr1: Box::new(at::Unit), bool_expr2: Box::new(at::Unit) },
+    "XOR" => at::ForthXor,
+    "INVERT" => at::ForthInvert,
+    "LSHIFT" => at::ForthLShift,
+    "RSHIFT" => at::ForthRShift
+}
+
+// Memory operators
+MemoryOp: at = {
+    "@" => at::ForthFetch,
+    "!" => at::ForthStore,
+    "+!" => at::ForthPlusStore,
+    "C@" => at::ForthCFetch,
+    "C!" => at::ForthCStore,
+    "CELLS" => at::ForthCells,
+    "ALLOT" => at::ForthAllot,
+    "," => at::ForthComma,
+    "C," => at::ForthCComma,
+    "HERE" => at::ForthHere
+}
+
+// I/O operations
+IOOp: at = {
+    "." => at::ForthDot,
+    "EMIT" => at::ForthEmit,
+    "CR" => at::ForthCR,
+    "SPACE" => at::ForthSpace,
+    "SPACES" => at::ForthSpaces { count: Box::new(at::Unit) },
+    "KEY" => at::ForthKey,
+    "TYPE" => at::ForthType { addr: Box::new(at::Unit), count: Box::new(at::Unit) },
+    "ACCEPT" => at::ForthAccept { addr: Box::new(at::Unit), max_len: Box::new(at::Unit) }
+}
+
+// Control structures (with bodies)
+ControlStruct: at = {
+    IfThen,
+    IfElseThen,
+    BeginUntil,
+    BeginWhileRepeat,
+    BeginAgain,
+    DoLoop,
+    DoPlusLoop,
+    CaseStruct
+}
+
+// IF ... THEN
+IfThen: at = {
+    "IF" <then:WordBody> "THEN" => at::If {
+        condition: Box::new(at::Unit),
+        then: Box::new(at::ForthSequence { words: then }),
+        els: Box::new(at::Unit)
+    }
+}
+
+// IF ... ELSE ... THEN
+IfElseThen: at = {
+    "IF" <then:WordBody> "ELSE" <els:WordBody> "THEN" => at::If {
+        condition: Box::new(at::Unit),
+        then: Box::new(at::ForthSequence { words: then }),
+        els: Box::new(at::ForthSequence { words: els })
+    }
+}
+
+// BEGIN ... UNTIL
+BeginUntil: at = {
+    "BEGIN" <body:WordBody> "UNTIL" => at::ForthBeginUntil {
+        body,
+        condition: Box::new(at::Unit)
+    }
+}
+
+// BEGIN ... WHILE ... REPEAT
+BeginWhileRepeat: at = {
+    "BEGIN" <while_body:WordBody> "WHILE" <repeat_body:WordBody> "REPEAT" => at::ForthBeginWhileRepeat {
+        condition: Box::new(at::Unit),
+        while_body,
+        repeat_body
+    }
+}
+
+// BEGIN ... AGAIN
+BeginAgain: at = {
+    "BEGIN" <body:WordBody> "AGAIN" => at::ForthBeginAgain { body }
+}
+
+// DO ... LOOP
+DoLoop: at = {
+    "DO" <body:WordBody> "LOOP" => at::ForthDoLoop { body }
+}
+
+// DO ... +LOOP
+DoPlusLoop: at = {
+    "DO" <body:WordBody> "+LOOP" => at::ForthDoPlusLoop {
+        body,
+        increment: Box::new(at::Unit)
+    }
+}
+
+// CASE ... ENDCASE
+CaseStruct: at = {
+    "CASE" <clauses:OfClauses> "ENDCASE" => at::ForthCase {
+        when_clauses: clauses,
+        default: None
+    },
+    "CASE" <clauses:OfClauses> <default:WordBody> "ENDCASE" => at::ForthCase {
+        when_clauses: clauses,
+        default: Some(default)
+    }
+}
+
+// List of OF clauses
+OfClauses: Vec<Box<at>> = {
+    <clause:OfClause> => vec![Box::new(clause)],
+    <clauses:OfClauses> <clause:OfClause> => {
+        let mut v = clauses;
+        v.push(Box::new(clause));
+        v
+    }
+}
+
+// OF ... ENDOF clause body
+OfClause: at = {
+    "OF" <body:WordBody> "ENDOF" => at::ForthOf {
+        value: Box::new(at::Unit),
+        body
+    }
+}
+
+// Comments
+Comment: at = {
+    r"\([^)]*\)" => at::ForthComment { text: <>.to_string() },
+    r"\\[^\n]*" => at::ForthLineComment { text: <>.to_string() }
+}
+
+// Identifier token
+Ident: String = r"[a-zA-Z_][a-zA-Z0-9_\-+*/<>=?!@#$%&]*" => <>.to_string();
+
+
