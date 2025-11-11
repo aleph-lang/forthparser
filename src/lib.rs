@@ -4,7 +4,7 @@ use aleph_syntax_tree::syntax::AlephTree as at;
 lalrpop_mod!(pub grammar);
 
 /// Forth parser
-/// 
+///
 /// # Arguments
 /// * `source` - String containing Forth code to parse
 ///
@@ -55,8 +55,8 @@ mod tests {
         let code = "42 CONSTANT answer";
         let ast = parse_definition(code.to_string());
         match ast {
-            at::ForthConst { name, .. } => assert_eq!(name, "answer"),
-            _ => panic!("Expected ForthConst"),
+            at::VarDecl { name, is_constant: true, .. } => assert_eq!(name, "answer"),
+            _ => panic!("Expected constant VarDecl"),
         }
     }
 
@@ -65,8 +65,8 @@ mod tests {
         let code = "VARIABLE counter";
         let ast = parse_definition(code.to_string());
         match ast {
-            at::ForthVar { name } => assert_eq!(name, "counter"),
-            _ => panic!("Expected ForthVar"),
+            at::VarDecl { name, is_constant: false, .. } => assert_eq!(name, "counter"),
+            _ => panic!("Expected variable VarDecl"),
         }
     }
 
@@ -75,11 +75,11 @@ mod tests {
         let code = ": square dup * ;";
         let ast = parse_definition(code.to_string());
         match ast {
-            at::ForthDef { name, body, .. } => {
+            at::ProcedureDef { name, body, .. } => {
                 assert_eq!(name, "square");
                 assert_eq!(body.len(), 2); // dup and *
             }
-            _ => panic!("Expected ForthDef"),
+            _ => panic!("Expected ProcedureDef"),
         }
     }
 
@@ -88,8 +88,8 @@ mod tests {
         let code = ": abs dup 0< IF negate THEN ;";
         let ast = parse_definition(code.to_string());
         match ast {
-            at::ForthDef { name, .. } => assert_eq!(name, "abs"),
-            _ => panic!("Expected ForthDef"),
+            at::ProcedureDef { name, .. } => assert_eq!(name, "abs"),
+            _ => panic!("Expected ProcedureDef"),
         }
     }
 
@@ -98,8 +98,8 @@ mod tests {
         let code = ": countdown BEGIN dup . 1- dup 0= UNTIL drop ;";
         let ast = parse_definition(code.to_string());
         match ast {
-            at::ForthDef { name, .. } => assert_eq!(name, "countdown"),
-            _ => panic!("Expected ForthDef"),
+            at::ProcedureDef { name, .. } => assert_eq!(name, "countdown"),
+            _ => panic!("Expected ProcedureDef"),
         }
     }
 
@@ -108,8 +108,8 @@ mod tests {
         let code = ": sum 0 swap 0 DO i + LOOP ;";
         let ast = parse_definition(code.to_string());
         match ast {
-            at::ForthDef { name, .. } => assert_eq!(name, "sum"),
-            _ => panic!("Expected ForthDef"),
+            at::ProcedureDef { name, .. } => assert_eq!(name, "sum"),
+            _ => panic!("Expected ProcedureDef"),
         }
     }
 
@@ -128,8 +128,8 @@ mod tests {
         let code = "0xFF CONSTANT max_byte";
         let ast = parse_definition(code.to_string());
         match ast {
-            at::ForthConst { name, .. } => assert_eq!(name, "max_byte"),
-            _ => panic!("Expected ForthConst"),
+            at::VarDecl { name, is_constant: true, .. } => assert_eq!(name, "max_byte"),
+            _ => panic!("Expected constant VarDecl"),
         }
     }
 
@@ -143,3 +143,4 @@ mod tests {
         }
     }
 }
+

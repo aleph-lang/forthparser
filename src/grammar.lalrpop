@@ -27,11 +27,16 @@ pub Definition: at = {
 }
 
 // Colon (word) definition parsing ": foo ... ;"
+// Now uses generic ProcedureDef with proc_type = "word"
 WordDefinition: at = {
-    ":" <name:Ident> <body:WordBody> ";" => at::ForthDef {
+    ":" <name:Ident> <body:WordBody> ";" => at::ProcedureDef {
         name,
+        proc_type: Some("word".to_string()),
+        parameters: vec![],
+        return_type: None,
+        attributes: vec![],
+        declarations: vec![],
         body,
-        is_immediate: false,
     }
 }
 
@@ -61,30 +66,67 @@ WordItem: at = {
 }
 
 // Constants of form "42 CONSTANT name"
+// Now uses generic VarDecl with is_constant = true
 ConstantDef: at = {
-    <val:Number> "CONSTANT" <name:Ident> => at::ForthConst {
+    <val:Number> "CONSTANT" <name:Ident> => at::VarDecl {
         name,
-        value: Box::new(val),
+        level: None,
+        var_type: None,
+        initial_value: Some(Box::new(val)),
+        is_constant: true,
+        is_aliased: false,
+        storage: None,
+        occurs: None,
+        usage: None,
+        attributes: vec!["forth_constant".to_string()],
     }
 }
 
 // Variables of form "VARIABLE name"
+// Now uses generic VarDecl
 VariableDef: at = {
-    "VARIABLE" <name:Ident> => at::ForthVar { name }
+    "VARIABLE" <name:Ident> => at::VarDecl {
+        name,
+        level: None,
+        var_type: None,
+        initial_value: None,
+        is_constant: false,
+        is_aliased: false,
+        storage: None,
+        occurs: None,
+        usage: None,
+        attributes: vec!["forth_variable".to_string()],
+    }
 }
 
-// CREATE ... [AllotClause] [DOES> WordBody] optional AllotClause/DOS>
+// CREATE ... [AllotClause] [DOES> WordBody] optional AllotClause/DOES>
 CreateDef: at = {
-    "CREATE" <name:Ident> ";" => at::ForthCreate { name, allot_size: None, does_body: None },
-    "CREATE" <name:Ident> <allot:AllotClause> ";" => at::ForthCreate { name, allot_size: Some(Box::new(allot)), does_body: None },
-    "CREATE" <name:Ident> "DOES>" <body:WordBody> ";" => at::ForthCreate { name, allot_size: None, does_body: Some(body) },
-    "CREATE" <name:Ident> <allot:AllotClause> "DOES>" <body:WordBody> ";" => at::ForthCreate { name, allot_size: Some(Box::new(allot)), does_body: Some(body) },
+    "CREATE" <name:Ident> ";" => at::ForthCreate { 
+        name, 
+        allot_size: None, 
+        does_body: None 
+    },
+    "CREATE" <name:Ident> <allot:AllotClause> ";" => at::ForthCreate { 
+        name, 
+        allot_size: Some(Box::new(allot)), 
+        does_body: None 
+    },
+    "CREATE" <name:Ident> "DOES>" <body:WordBody> ";" => at::ForthCreate { 
+        name, 
+        allot_size: None, 
+        does_body: Some(body) 
+    },
+    "CREATE" <name:Ident> <allot:AllotClause> "DOES>" <body:WordBody> ";" => at::ForthCreate { 
+        name, 
+        allot_size: Some(Box::new(allot)), 
+        does_body: Some(body) 
+    },
 }
 
 // AllotClause is either a Number ALLOT or Number CELLS ALLOT
 AllotClause: at = {
     <n:Number> "ALLOT" => n,
-    <n:Number> "CELLS" "ALLOT" => at::ForthCells,
+    <n:Number> "CELLS" "ALLOT" => at::ForthCells { n: Box::new(n) },
 }
 
 // Number literal covers Int, Float, Hex
@@ -100,12 +142,11 @@ Integer: at = r"-?[0-9]+" => at::Int { value: <>.to_string() };
 // Float literal: at::Float variant
 Float: at = r"-?[0-9]+\.[0-9]+" => at::Float { value: <>.to_string() };
 
-// HexNumber literal: at::ForthHex variant
-HexNumber: at = r"0[xX][0-9A-Fa-f]+" => at::ForthHex { value: <>.to_string() };
+// HexNumber literal: at::HexLiteral variant (generic)
+HexNumber: at = r"0[xX][0-9A-Fa-f]+" => at::HexLiteral { value: <>.to_string() };
 
 // String literal for ." ... " and S" ... "
 StringLiteral: at = {
-    // Matches the entire ." string, including the dot and quote
     r#"\." [^"]* ""# => {
         let s = <>.to_string();
         let text = s.trim_start_matches(".\"").trim_end_matches('"').trim();
@@ -147,74 +188,190 @@ StackOp: at = {
     "LEAVE" => at::ForthLeave
 }
 
-// Arithmetic operations produce matching variants
+// Arithmetic operations - now use generic nodes where possible
 ArithOp: at = {
-    "+" => at::Add { number_expr1: Box::new(at::Unit), number_expr2: Box::new(at::Unit) },
-    "-" => at::Sub { number_expr1: Box::new(at::Unit), number_expr2: Box::new(at::Unit) },
-    "*" => at::Mul { number_expr1: Box::new(at::Unit), number_expr2: Box::new(at::Unit) },
-    "/" => at::Div { number_expr1: Box::new(at::Unit), number_expr2: Box::new(at::Unit) },
-    "MOD" => at::ForthMod,
-    "/MOD" => at::ForthDivMod,
-    "*/" => at::ForthMulDiv,
-    "*/MOD" => at::ForthMulDivMod,
-    "1+" => at::ForthOnePlus,
-    "1-" => at::ForthOneMinus,
-    "2*" => at::ForthTwoMul,
-    "2/" => at::ForthTwoDiv,
-    "ABS" => at::ForthAbs,
-    "NEGATE" => at::ForthNegate,
-    "MIN" => at::ForthMin,
-    "MAX" => at::ForthMax
+    "+" => at::Add { 
+        number_expr1: Box::new(at::Unit), 
+        number_expr2: Box::new(at::Unit) 
+    },
+    "-" => at::Sub { 
+        number_expr1: Box::new(at::Unit), 
+        number_expr2: Box::new(at::Unit) 
+    },
+    "*" => at::Mul { 
+        number_expr1: Box::new(at::Unit), 
+        number_expr2: Box::new(at::Unit) 
+    },
+    "/" => at::Div { 
+        number_expr1: Box::new(at::Unit), 
+        number_expr2: Box::new(at::Unit) 
+    },
+    "MOD" => at::Mod { 
+        number_expr1: Box::new(at::Unit), 
+        number_expr2: Box::new(at::Unit) 
+    },
+    "/MOD" => at::DivMod { 
+        dividend: Box::new(at::Unit), 
+        divisor: Box::new(at::Unit) 
+    },
+    "*/" => at::MulDiv { 
+        n1: Box::new(at::Unit), 
+        n2: Box::new(at::Unit), 
+        n3: Box::new(at::Unit) 
+    },
+    "*/MOD" => at::MulDivMod { 
+        n1: Box::new(at::Unit), 
+        n2: Box::new(at::Unit), 
+        n3: Box::new(at::Unit) 
+    },
+    // 1+ can be represented as Add with Int{value: "1"}
+    // but keeping specific for now for Forth semantics
+    "1+" => at::Add { 
+        number_expr1: Box::new(at::Unit), 
+        number_expr2: Box::new(at::Int { value: "1".to_string() }) 
+    },
+    "1-" => at::Sub { 
+        number_expr1: Box::new(at::Unit), 
+        number_expr2: Box::new(at::Int { value: "1".to_string() }) 
+    },
+    "2*" => at::Mul { 
+        number_expr1: Box::new(at::Unit), 
+        number_expr2: Box::new(at::Int { value: "2".to_string() }) 
+    },
+    "2/" => at::Div { 
+        number_expr1: Box::new(at::Unit), 
+        number_expr2: Box::new(at::Int { value: "2".to_string() }) 
+    },
+    "ABS" => at::Abs { expr: Box::new(at::Unit) },
+    "NEGATE" => at::Neg { expr: Box::new(at::Unit) },
+    "MIN" => at::Min { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Unit) 
+    },
+    "MAX" => at::Max { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Unit) 
+    }
 }
 
-// Comparison operators
+// Comparison operators - now use generic nodes
 CompareOp: at = {
-    "=" => at::Eq { expr1: Box::new(at::Unit), expr2: Box::new(at::Unit) },
-    "<>" => at::ForthNotEq,
-    "<" => at::ForthLessThan,
-    ">" => at::ForthGreater,
-    "<=" => at::LE { expr1: Box::new(at::Unit), expr2: Box::new(at::Unit) },
-    ">=" => at::ForthGreaterEq,
-    "0=" => at::ForthZeroEq,
-    "0<>" => at::ForthZeroNotEq,
-    "0<" => at::ForthZeroLess,
-    "0>" => at::ForthZeroGreater
+    "=" => at::Eq { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Unit) 
+    },
+    "<>" => at::NotEq { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Unit) 
+    },
+    "<" => at::LT { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Unit) 
+    },
+    ">" => at::GT { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Unit) 
+    },
+    "<=" => at::LE { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Unit) 
+    },
+    ">=" => at::GE { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Unit) 
+    },
+    // Zero comparisons: 0= is Eq(x, 0)
+    "0=" => at::Eq { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Int { value: "0".to_string() }) 
+    },
+    "0<>" => at::NotEq { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Int { value: "0".to_string() }) 
+    },
+    "0<" => at::LT { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Int { value: "0".to_string() }) 
+    },
+    "0>" => at::GT { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Int { value: "0".to_string() }) 
+    }
 }
 
-// Logic operators
+// Logic operators - now use generic bitwise nodes
 LogicOp: at = {
-    "AND" => at::And { bool_expr1: Box::new(at::Unit), bool_expr2: Box::new(at::Unit) },
-    "OR" => at::Or { bool_expr1: Box::new(at::Unit), bool_expr2: Box::new(at::Unit) },
-    "XOR" => at::ForthXor,
-    "INVERT" => at::ForthInvert,
-    "LSHIFT" => at::ForthLShift,
-    "RSHIFT" => at::ForthRShift
+    "AND" => at::BitAnd { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Unit) 
+    },
+    "OR" => at::BitOr { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Unit) 
+    },
+    "XOR" => at::BitXor { 
+        expr1: Box::new(at::Unit), 
+        expr2: Box::new(at::Unit) 
+    },
+    "INVERT" => at::BitNot { expr: Box::new(at::Unit) },
+    "LSHIFT" => at::LShift { 
+        expr: Box::new(at::Unit), 
+        amount: Box::new(at::Unit) 
+    },
+    "RSHIFT" => at::RShift { 
+        expr: Box::new(at::Unit), 
+        amount: Box::new(at::Unit) 
+    }
 }
 
-// Memory operators
+// Memory operators - now use generic Fetch/Store where possible
 MemoryOp: at = {
-    "@" => at::ForthFetch,
-    "!" => at::ForthStore,
-    "+!" => at::ForthPlusStore,
-    "C@" => at::ForthCFetch,
-    "C!" => at::ForthCStore,
-    "CELLS" => at::ForthCells,
-    "ALLOT" => at::ForthAllot,
-    "," => at::ForthComma,
-    "C," => at::ForthCComma,
+    "@" => at::Fetch { 
+        addr: Box::new(at::Unit),
+        fetch_type: Some("cell".to_string())
+    },
+    "!" => at::Store { 
+        value: Box::new(at::Unit), 
+        addr: Box::new(at::Unit),
+        store_type: Some("cell".to_string())
+    },
+    "+!" => at::StoreOp { 
+        value: Box::new(at::Unit), 
+        addr: Box::new(at::Unit),
+        op: "+".to_string()
+    },
+    "C@" => at::Fetch { 
+        addr: Box::new(at::Unit),
+        fetch_type: Some("byte".to_string())
+    },
+    "C!" => at::Store { 
+        value: Box::new(at::Unit), 
+        addr: Box::new(at::Unit),
+        store_type: Some("byte".to_string())
+    },
+    "CELLS" => at::ForthCells { n: Box::new(at::Unit) },
+    "ALLOT" => at::ForthAllot { n: Box::new(at::Unit) },
+    "," => at::ForthComma { value: Box::new(at::Unit) },
+    "C," => at::ForthCComma { value: Box::new(at::Unit) },
     "HERE" => at::ForthHere
 }
 
-// I/O operations
+// I/O operations - these are Forth-specific
 IOOp: at = {
-    "." => at::ForthDot,
-    "EMIT" => at::ForthEmit,
+    "." => at::ForthDot { value: Box::new(at::Unit) },
+    "EMIT" => at::ForthEmit { char: Box::new(at::Unit) },
     "CR" => at::ForthCR,
     "SPACE" => at::ForthSpace,
     "SPACES" => at::ForthSpaces { count: Box::new(at::Unit) },
     "KEY" => at::ForthKey,
-    "TYPE" => at::ForthType { addr: Box::new(at::Unit), count: Box::new(at::Unit) },
-    "ACCEPT" => at::ForthAccept { addr: Box::new(at::Unit), max_len: Box::new(at::Unit) }
+    "TYPE" => at::ForthType { 
+        addr: Box::new(at::Unit), 
+        count: Box::new(at::Unit) 
+    },
+    "ACCEPT" => at::ForthAccept { 
+        addr: Box::new(at::Unit), 
+        max_len: Box::new(at::Unit) 
+    }
 }
 
 // Control structures (with bodies)
@@ -229,7 +386,7 @@ ControlStruct: at = {
     CaseStruct
 }
 
-// IF ... THEN
+// IF ... THEN - uses generic If node
 IfThen: at = {
     "IF" <then:WordBody> "THEN" => at::If {
         condition: Box::new(at::Unit),
@@ -238,7 +395,7 @@ IfThen: at = {
     }
 }
 
-// IF ... ELSE ... THEN
+// IF ... ELSE ... THEN - uses generic If node
 IfElseThen: at = {
     "IF" <then:WordBody> "ELSE" <els:WordBody> "THEN" => at::If {
         condition: Box::new(at::Unit),
@@ -247,7 +404,7 @@ IfElseThen: at = {
     }
 }
 
-// BEGIN ... UNTIL
+// BEGIN ... UNTIL - Forth-specific
 BeginUntil: at = {
     "BEGIN" <body:WordBody> "UNTIL" => at::ForthBeginUntil {
         body,
@@ -255,7 +412,7 @@ BeginUntil: at = {
     }
 }
 
-// BEGIN ... WHILE ... REPEAT
+// BEGIN ... WHILE ... REPEAT - Forth-specific
 BeginWhileRepeat: at = {
     "BEGIN" <while_body:WordBody> "WHILE" <repeat_body:WordBody> "REPEAT" => at::ForthBeginWhileRepeat {
         condition: Box::new(at::Unit),
@@ -264,33 +421,48 @@ BeginWhileRepeat: at = {
     }
 }
 
-// BEGIN ... AGAIN
+// BEGIN ... AGAIN - Forth-specific
 BeginAgain: at = {
     "BEGIN" <body:WordBody> "AGAIN" => at::ForthBeginAgain { body }
 }
 
-// DO ... LOOP
+// DO ... LOOP - now uses generic DoLoop
 DoLoop: at = {
-    "DO" <body:WordBody> "LOOP" => at::ForthDoLoop { body }
-}
-
-// DO ... +LOOP
-DoPlusLoop: at = {
-    "DO" <body:WordBody> "+LOOP" => at::ForthDoPlusLoop {
-        body,
-        increment: Box::new(at::Unit)
+    "DO" <body:WordBody> "LOOP" => at::DoLoop {
+        loop_var: None,
+        start: Some(Box::new(at::Unit)),
+        end: Some(Box::new(at::Unit)),
+        by: None,
+        while_cond: None,
+        until_cond: None,
+        body
     }
 }
 
-// CASE ... ENDCASE
+// DO ... +LOOP - now uses generic DoLoop with increment
+DoPlusLoop: at = {
+    "DO" <body:WordBody> "+LOOP" => at::DoLoop {
+        loop_var: None,
+        start: Some(Box::new(at::Unit)),
+        end: Some(Box::new(at::Unit)),
+        by: Some(Box::new(at::Unit)),
+        while_cond: None,
+        until_cond: None,
+        body
+    }
+}
+
+// CASE ... ENDCASE - now uses generic Case node
 CaseStruct: at = {
-    "CASE" <clauses:OfClauses> "ENDCASE" => at::ForthCase {
-        when_clauses: clauses,
-        default: None
+    "CASE" <clauses:OfClauses> "ENDCASE" => at::Case {
+        expr: Box::new(at::Unit),
+        cases: clauses,
+        default_case: None
     },
-    "CASE" <clauses:OfClauses> <default:WordBody> "ENDCASE" => at::ForthCase {
-        when_clauses: clauses,
-        default: Some(default)
+    "CASE" <clauses:OfClauses> <default:WordBody> "ENDCASE" => at::Case {
+        expr: Box::new(at::Unit),
+        cases: clauses,
+        default_case: Some(Box::new(at::ForthSequence { words: default }))
     }
 }
 
@@ -304,21 +476,32 @@ OfClauses: Vec<Box<at>> = {
     }
 }
 
-// OF ... ENDOF clause body
+// OF ... ENDOF clause body - now uses generic CaseBranch
 OfClause: at = {
-    "OF" <body:WordBody> "ENDOF" => at::ForthOf {
-        value: Box::new(at::Unit),
+    "OF" <body:WordBody> "ENDOF" => at::CaseBranch {
+        pattern: Box::new(at::Unit),
         body
     }
 }
 
-// Comments
+// Comments - uses generic Comment node
 Comment: at = {
-    r"\([^)]*\)" => at::ForthComment { text: <>.to_string() },
-    r"\\[^\n]*" => at::ForthLineComment { text: <>.to_string() }
+    r"\([^)]*\)" => {
+        let text = <>.to_string()
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .trim()
+            .to_string();
+        at::Comment { value: text }
+    },
+    r"\\[^\n]*" => {
+        let text = <>.to_string()
+            .trim_start_matches('\\')
+            .trim()
+            .to_string();
+        at::Comment { value: text }
+    }
 }
 
 // Identifier token
 Ident: String = r"[a-zA-Z_][a-zA-Z0-9_\-+*/<>=?!@#$%&]*" => <>.to_string();
-
-

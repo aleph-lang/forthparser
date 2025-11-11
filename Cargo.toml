@@ -1,6 +1,6 @@
 [package]
 name = "forthparser"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license-file="LICENSE"
 repository="https://github.com/aleph-lang/forthparser"
@@ -13,10 +13,10 @@ opt-level = 3
 opt-level = 3 
 
 [build-dependencies]
-lalrpop = { version = "0.20", features = ["lexer"] }
+lalrpop = { version = "0.22", features = ["lexer"] }
 
 [dependencies]
-lalrpop-util = {version = "0.20", features = ["lexer"]}
+lalrpop-util = {version = "0.22", features = ["lexer"]}
 regex = "1"
-aleph-syntax-tree = "0.1.2"
+aleph-syntax-tree = "0.1.3"
 
