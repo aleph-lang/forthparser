@@ -118,8 +118,8 @@ mod tests {
         let code = "( This is a comment ) : test dup ;";
         let ast = parse(code.to_string());
         match ast {
-            at::ForthProgram { .. } => {},
-            _ => panic!("Expected ForthProgram"),
+            at::Module { .. } => {},
+            _ => panic!("Expected Module"),
         }
     }
 
@@ -138,8 +138,8 @@ mod tests {
         let code = "CREATE buffer 100 ALLOT ;";
         let ast = parse_definition(code.to_string());
         match ast {
-            at::ForthCreate { name, .. } => assert_eq!(name, "buffer"),
-            _ => panic!("Expected ForthCreate"),
+            at::CreateDoes { name, .. } => assert_eq!(name, "buffer"),
+            _ => panic!("Expected CreateDoes"),
         }
     }
 }

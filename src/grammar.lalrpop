@@ -2,12 +2,19 @@ grammar;
 
 use aleph_syntax_tree::syntax::AlephTree as at;
 
-// The top-level program parser producing an AlephTree::ForthProgram
+// Top-level program parser producing a Module
 pub Program: at = {
-    <defs:Definitions> => at::ForthProgram { definitions: defs },
+    <defs:Definitions> => at::Module {
+        name: "FORTH_PROGRAM".to_string(),
+        module_type: "program".to_string(),
+        id: None,
+        declarations: defs,
+        body: None,
+        initialization: None,
+    },
 }
 
-// A non-empty vector of definitions
+// Non-empty vector of definitions
 pub Definitions: Vec<Box<at>> = {
     <def:Definition> => vec![Box::new(def)],
     <defs:Definitions> <def:Definition> => {
@@ -26,8 +33,7 @@ pub Definition: at = {
     Comment,
 }
 
-// Colon (word) definition parsing ": foo ... ;"
-// Now uses generic ProcedureDef with proc_type = "word"
+// Colon definition ": foo ... ;" - uses generic ProcedureDef with proc_type = "word"
 WordDefinition: at = {
     ":" <name:Ident> <body:WordBody> ";" => at::ProcedureDef {
         name,
@@ -40,7 +46,7 @@ WordDefinition: at = {
     }
 }
 
-// Body of a word is sequence of WordItems
+// Body of a word is a sequence of WordItems
 pub WordBody: Vec<Box<at>> = {
     <word:WordItem> => vec![Box::new(word)],
     <body:WordBody> <word:WordItem> => {
@@ -50,7 +56,7 @@ pub WordBody: Vec<Box<at>> = {
     }
 }
 
-// Single word items - produce AST nodes exactly matching AlephTree variants
+// Single word item - produces AST nodes matching AlephTree variants
 WordItem: at = {
     Number,
     StringLiteral,
@@ -65,8 +71,7 @@ WordItem: at = {
     Comment,
 }
 
-// Constants of form "42 CONSTANT name"
-// Now uses generic VarDecl with is_constant = true
+// Constants "42 CONSTANT name" - uses generic VarDecl with is_constant = true
 ConstantDef: at = {
     <val:Number> "CONSTANT" <name:Ident> => at::VarDecl {
         name,
@@ -82,8 +87,7 @@ ConstantDef: at = {
     }
 }
 
-// Variables of form "VARIABLE name"
-// Now uses generic VarDecl
+// Variables "VARIABLE name" - uses generic VarDecl
 VariableDef: at = {
     "VARIABLE" <name:Ident> => at::VarDecl {
         name,
@@ -99,34 +103,37 @@ VariableDef: at = {
     }
 }
 
-// CREATE ... [AllotClause] [DOES> WordBody] optional AllotClause/DOES>
+// CREATE ... [AllotClause] [DOES> WordBody] - uses generic CreateDoes
 CreateDef: at = {
-    "CREATE" <name:Ident> ";" => at::ForthCreate { 
-        name, 
-        allot_size: None, 
-        does_body: None 
+    "CREATE" <name:Ident> ";" => at::CreateDoes {
+        name,
+        allot_size: None,
+        does_body: None
     },
-    "CREATE" <name:Ident> <allot:AllotClause> ";" => at::ForthCreate { 
-        name, 
-        allot_size: Some(Box::new(allot)), 
-        does_body: None 
+    "CREATE" <name:Ident> <allot:AllotClause> ";" => at::CreateDoes {
+        name,
+        allot_size: Some(Box::new(allot)),
+        does_body: None
     },
-    "CREATE" <name:Ident> "DOES>" <body:WordBody> ";" => at::ForthCreate { 
-        name, 
-        allot_size: None, 
-        does_body: Some(body) 
+    "CREATE" <name:Ident> "DOES>" <body:WordBody> ";" => at::CreateDoes {
+        name,
+        allot_size: None,
+        does_body: Some(body)
     },
-    "CREATE" <name:Ident> <allot:AllotClause> "DOES>" <body:WordBody> ";" => at::ForthCreate { 
-        name, 
-        allot_size: Some(Box::new(allot)), 
-        does_body: Some(body) 
+    "CREATE" <name:Ident> <allot:AllotClause> "DOES>" <body:WordBody> ";" => at::CreateDoes {
+        name,
+        allot_size: Some(Box::new(allot)),
+        does_body: Some(body)
     },
 }
 
-// AllotClause is either a Number ALLOT or Number CELLS ALLOT
+// AllotClause is either "Number ALLOT" or "Number CELLS ALLOT"
 AllotClause: at = {
     <n:Number> "ALLOT" => n,
-    <n:Number> "CELLS" "ALLOT" => at::ForthCells { n: Box::new(n) },
+    <n:Number> "CELLS" "ALLOT" => at::MemoryOp { 
+        operation: "cells".to_string(), 
+        args: vec![Box::new(n)] 
+    },
 }
 
 // Number literal covers Int, Float, Hex
@@ -136,245 +143,282 @@ Number: at = {
     HexNumber,
 }
 
-// Integer literal: at::Int variant
+// Integer literal - uses generic Int
 Integer: at = r"-?[0-9]+" => at::Int { value: <>.to_string() };
 
-// Float literal: at::Float variant
+// Float literal - uses generic Float
 Float: at = r"-?[0-9]+\.[0-9]+" => at::Float { value: <>.to_string() };
 
-// HexNumber literal: at::HexLiteral variant (generic)
+// Hex number literal - uses generic HexLiteral
 HexNumber: at = r"0[xX][0-9A-Fa-f]+" => at::HexLiteral { value: <>.to_string() };
 
-// String literal for ." ... " and S" ... "
+// String literals for ." ... " and S" ... "
 StringLiteral: at = {
     r#"\." [^"]* ""# => {
         let s = <>.to_string();
         let text = s.trim_start_matches(".\"").trim_end_matches('"').trim();
-        at::ForthDotQuote { text: text.to_string() }
+        at::Emit { 
+            value: Box::new(at::String { value: text.to_string() }),
+            emit_type: Some("string".to_string())
+        }
     },
     r#"S" [^"]* ""# => {
         let s = <>.to_string();
         let text = s.trim_start_matches("S\"").trim_end_matches('"').trim();
-        at::ForthSQuote { text: text.to_string() }
+        at::String { value: text.to_string() }
     }
 }
 
-// Word references - must produce AlephTree::Ident variant
+// Word reference - uses generic Ident
 Word: at = {
     <name:Ident> => at::Ident { value: name }
 }
 
-// Stack operations produce matching variants
+// Stack operations - uses generic StackOp
 StackOp: at = {
-    "DUP" => at::ForthDup,
-    "DROP" => at::ForthDrop,
-    "SWAP" => at::ForthSwap,
-    "OVER" => at::ForthOver,
-    "ROT" => at::ForthRot,
-    "-ROT" => at::ForthMinusRot,
-    "NIP" => at::ForthNip,
-    "TUCK" => at::ForthTuck,
-    "PICK" => at::ForthPick { depth: Box::new(at::Unit) },
-    "ROLL" => at::ForthRoll { depth: Box::new(at::Unit) },
-    "2DUP" => at::ForthTwoDup,
-    "2DROP" => at::ForthTwoDrop,
-    "2SWAP" => at::ForthTwoSwap,
-    "2OVER" => at::ForthTwoOver,
-    ">R" => at::ForthToR,
-    "R>" => at::ForthFromR,
-    "R@" => at::ForthRFetch,
-    "I" => at::ForthI,
-    "J" => at::ForthJ,
-    "LEAVE" => at::ForthLeave
+    "DUP" => at::StackOp { operation: "dup".to_string(), args: vec![] },
+    "DROP" => at::StackOp { operation: "drop".to_string(), args: vec![] },
+    "SWAP" => at::StackOp { operation: "swap".to_string(), args: vec![] },
+    "OVER" => at::StackOp { operation: "over".to_string(), args: vec![] },
+    "ROT" => at::StackOp { operation: "rot".to_string(), args: vec![] },
+    "-ROT" => at::StackOp { operation: "-rot".to_string(), args: vec![] },
+    "NIP" => at::StackOp { operation: "nip".to_string(), args: vec![] },
+    "TUCK" => at::StackOp { operation: "tuck".to_string(), args: vec![] },
+    "PICK" => at::StackOp { operation: "pick".to_string(), args: vec![Box::new(at::Unit)] },
+    "ROLL" => at::StackOp { operation: "roll".to_string(), args: vec![Box::new(at::Unit)] },
+    "2DUP" => at::StackOp { operation: "2dup".to_string(), args: vec![] },
+    "2DROP" => at::StackOp { operation: "2drop".to_string(), args: vec![] },
+    "2SWAP" => at::StackOp { operation: "2swap".to_string(), args: vec![] },
+    "2OVER" => at::StackOp { operation: "2over".to_string(), args: vec![] },
+    ">R" => at::StackOp { operation: ">r".to_string(), args: vec![] },
+    "R>" => at::StackOp { operation: "r>".to_string(), args: vec![] },
+    "R@" => at::StackOp { operation: "r@".to_string(), args: vec![] },
+    "I" => at::Var { var: "i".to_string(), is_pointer: "false".to_string() },
+    "J" => at::Var { var: "j".to_string(), is_pointer: "false".to_string() },
+    "LEAVE" => at::Break
 }
 
-// Arithmetic operations - now use generic nodes where possible
+// Arithmetic operations - uses generic arithmetic nodes
 ArithOp: at = {
-    "+" => at::Add { 
-        number_expr1: Box::new(at::Unit), 
-        number_expr2: Box::new(at::Unit) 
+    "+" => at::Add {
+        number_expr1: Box::new(at::Unit),
+        number_expr2: Box::new(at::Unit)
     },
-    "-" => at::Sub { 
-        number_expr1: Box::new(at::Unit), 
-        number_expr2: Box::new(at::Unit) 
+    "-" => at::Sub {
+        number_expr1: Box::new(at::Unit),
+        number_expr2: Box::new(at::Unit)
     },
-    "*" => at::Mul { 
-        number_expr1: Box::new(at::Unit), 
-        number_expr2: Box::new(at::Unit) 
+    "*" => at::Mul {
+        number_expr1: Box::new(at::Unit),
+        number_expr2: Box::new(at::Unit)
     },
-    "/" => at::Div { 
-        number_expr1: Box::new(at::Unit), 
-        number_expr2: Box::new(at::Unit) 
+    "/" => at::Div {
+        number_expr1: Box::new(at::Unit),
+        number_expr2: Box::new(at::Unit)
     },
-    "MOD" => at::Mod { 
-        number_expr1: Box::new(at::Unit), 
-        number_expr2: Box::new(at::Unit) 
+    "MOD" => at::Mod {
+        number_expr1: Box::new(at::Unit),
+        number_expr2: Box::new(at::Unit)
     },
-    "/MOD" => at::DivMod { 
-        dividend: Box::new(at::Unit), 
-        divisor: Box::new(at::Unit) 
+    "/MOD" => at::DivMod {
+        dividend: Box::new(at::Unit),
+        divisor: Box::new(at::Unit)
     },
-    "*/" => at::MulDiv { 
-        n1: Box::new(at::Unit), 
-        n2: Box::new(at::Unit), 
-        n3: Box::new(at::Unit) 
+    "*/" => at::MulDiv {
+        n1: Box::new(at::Unit),
+        n2: Box::new(at::Unit),
+        n3: Box::new(at::Unit)
     },
-    "*/MOD" => at::MulDivMod { 
-        n1: Box::new(at::Unit), 
-        n2: Box::new(at::Unit), 
-        n3: Box::new(at::Unit) 
+    "*/MOD" => at::MulDivMod {
+        n1: Box::new(at::Unit),
+        n2: Box::new(at::Unit),
+        n3: Box::new(at::Unit)
     },
-    // 1+ can be represented as Add with Int{value: "1"}
-    // but keeping specific for now for Forth semantics
-    "1+" => at::Add { 
-        number_expr1: Box::new(at::Unit), 
-        number_expr2: Box::new(at::Int { value: "1".to_string() }) 
+    "1+" => at::Add {
+        number_expr1: Box::new(at::Unit),
+        number_expr2: Box::new(at::Int { value: "1".to_string() })
     },
-    "1-" => at::Sub { 
-        number_expr1: Box::new(at::Unit), 
-        number_expr2: Box::new(at::Int { value: "1".to_string() }) 
+    "1-" => at::Sub {
+        number_expr1: Box::new(at::Unit),
+        number_expr2: Box::new(at::Int { value: "1".to_string() })
     },
-    "2*" => at::Mul { 
-        number_expr1: Box::new(at::Unit), 
-        number_expr2: Box::new(at::Int { value: "2".to_string() }) 
+    "2*" => at::Mul {
+        number_expr1: Box::new(at::Unit),
+        number_expr2: Box::new(at::Int { value: "2".to_string() })
     },
-    "2/" => at::Div { 
-        number_expr1: Box::new(at::Unit), 
-        number_expr2: Box::new(at::Int { value: "2".to_string() }) 
+    "2/" => at::Div {
+        number_expr1: Box::new(at::Unit),
+        number_expr2: Box::new(at::Int { value: "2".to_string() })
     },
     "ABS" => at::Abs { expr: Box::new(at::Unit) },
     "NEGATE" => at::Neg { expr: Box::new(at::Unit) },
-    "MIN" => at::Min { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Unit) 
+    "MIN" => at::Min {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Unit)
     },
-    "MAX" => at::Max { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Unit) 
+    "MAX" => at::Max {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Unit)
     }
 }
 
-// Comparison operators - now use generic nodes
+// Comparison operators - uses generic comparison nodes
 CompareOp: at = {
-    "=" => at::Eq { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Unit) 
+    "=" => at::Eq {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Unit)
     },
-    "<>" => at::NotEq { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Unit) 
+    "<>" => at::NotEq {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Unit)
     },
-    "<" => at::LT { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Unit) 
+    "<" => at::LT {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Unit)
     },
-    ">" => at::GT { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Unit) 
+    ">" => at::GT {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Unit)
     },
-    "<=" => at::LE { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Unit) 
+    "<=" => at::LE {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Unit)
     },
-    ">=" => at::GE { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Unit) 
+    ">=" => at::GE {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Unit)
     },
-    // Zero comparisons: 0= is Eq(x, 0)
-    "0=" => at::Eq { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Int { value: "0".to_string() }) 
+    "0=" => at::Eq {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Int { value: "0".to_string() })
     },
-    "0<>" => at::NotEq { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Int { value: "0".to_string() }) 
+    "0<>" => at::NotEq {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Int { value: "0".to_string() })
     },
-    "0<" => at::LT { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Int { value: "0".to_string() }) 
+    "0<" => at::LT {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Int { value: "0".to_string() })
     },
-    "0>" => at::GT { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Int { value: "0".to_string() }) 
+    "0>" => at::GT {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Int { value: "0".to_string() })
     }
 }
 
-// Logic operators - now use generic bitwise nodes
+// Logic operators - uses generic bitwise nodes
 LogicOp: at = {
-    "AND" => at::BitAnd { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Unit) 
+    "AND" => at::BitAnd {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Unit)
     },
-    "OR" => at::BitOr { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Unit) 
+    "OR" => at::BitOr {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Unit)
     },
-    "XOR" => at::BitXor { 
-        expr1: Box::new(at::Unit), 
-        expr2: Box::new(at::Unit) 
+    "XOR" => at::BitXor {
+        expr1: Box::new(at::Unit),
+        expr2: Box::new(at::Unit)
     },
     "INVERT" => at::BitNot { expr: Box::new(at::Unit) },
-    "LSHIFT" => at::LShift { 
-        expr: Box::new(at::Unit), 
-        amount: Box::new(at::Unit) 
+    "LSHIFT" => at::LShift {
+        expr: Box::new(at::Unit),
+        amount: Box::new(at::Unit)
     },
-    "RSHIFT" => at::RShift { 
-        expr: Box::new(at::Unit), 
-        amount: Box::new(at::Unit) 
+    "RSHIFT" => at::RShift {
+        expr: Box::new(at::Unit),
+        amount: Box::new(at::Unit)
     }
 }
 
-// Memory operators - now use generic Fetch/Store where possible
+// Memory operators - uses generic Fetch/Store and MemoryOp
 MemoryOp: at = {
-    "@" => at::Fetch { 
+    "@" => at::Fetch {
         addr: Box::new(at::Unit),
         fetch_type: Some("cell".to_string())
     },
-    "!" => at::Store { 
-        value: Box::new(at::Unit), 
+    "!" => at::Store {
+        value: Box::new(at::Unit),
         addr: Box::new(at::Unit),
         store_type: Some("cell".to_string())
     },
-    "+!" => at::StoreOp { 
-        value: Box::new(at::Unit), 
+    "+!" => at::StoreOp {
+        value: Box::new(at::Unit),
         addr: Box::new(at::Unit),
         op: "+".to_string()
     },
-    "C@" => at::Fetch { 
+    "C@" => at::Fetch {
         addr: Box::new(at::Unit),
         fetch_type: Some("byte".to_string())
     },
-    "C!" => at::Store { 
-        value: Box::new(at::Unit), 
+    "C!" => at::Store {
+        value: Box::new(at::Unit),
         addr: Box::new(at::Unit),
         store_type: Some("byte".to_string())
     },
-    "CELLS" => at::ForthCells { n: Box::new(at::Unit) },
-    "ALLOT" => at::ForthAllot { n: Box::new(at::Unit) },
-    "," => at::ForthComma { value: Box::new(at::Unit) },
-    "C," => at::ForthCComma { value: Box::new(at::Unit) },
-    "HERE" => at::ForthHere
-}
-
-// I/O operations - these are Forth-specific
-IOOp: at = {
-    "." => at::ForthDot { value: Box::new(at::Unit) },
-    "EMIT" => at::ForthEmit { char: Box::new(at::Unit) },
-    "CR" => at::ForthCR,
-    "SPACE" => at::ForthSpace,
-    "SPACES" => at::ForthSpaces { count: Box::new(at::Unit) },
-    "KEY" => at::ForthKey,
-    "TYPE" => at::ForthType { 
-        addr: Box::new(at::Unit), 
-        count: Box::new(at::Unit) 
+    "CELLS" => at::MemoryOp { 
+        operation: "cells".to_string(), 
+        args: vec![Box::new(at::Unit)] 
     },
-    "ACCEPT" => at::ForthAccept { 
-        addr: Box::new(at::Unit), 
-        max_len: Box::new(at::Unit) 
+    "ALLOT" => at::MemoryOp { 
+        operation: "allot".to_string(), 
+        args: vec![Box::new(at::Unit)] 
+    },
+    "," => at::DataOp { 
+        operation: "comma".to_string(), 
+        value: Box::new(at::Unit) 
+    },
+    "C," => at::DataOp { 
+        operation: "c-comma".to_string(), 
+        value: Box::new(at::Unit) 
+    },
+    "HERE" => at::MemoryOp { 
+        operation: "here".to_string(), 
+        args: vec![] 
     }
 }
 
-// Control structures (with bodies)
+// I/O operations - uses generic Emit and Input nodes
+IOOp: at = {
+    "." => at::Emit { 
+        value: Box::new(at::Unit), 
+        emit_type: Some("number".to_string()) 
+    },
+    "EMIT" => at::Emit { 
+        value: Box::new(at::Unit), 
+        emit_type: Some("char".to_string()) 
+    },
+    "CR" => at::Emit { 
+        value: Box::new(at::String { value: "\n".to_string() }), 
+        emit_type: Some("string".to_string()) 
+    },
+    "SPACE" => at::Emit { 
+        value: Box::new(at::String { value: " ".to_string() }), 
+        emit_type: Some("string".to_string()) 
+    },
+    "SPACES" => at::Emit { 
+        value: Box::new(at::Unit), 
+        emit_type: Some("spaces".to_string()) 
+    },
+    "KEY" => at::Input { 
+        targets: vec![],
+        source: None,
+        options: vec!["key".to_string()]
+    },
+    "TYPE" => at::Print {
+        items: vec![Box::new(at::Unit)],
+        destination: None,
+        format: None,
+        options: vec!["type".to_string()]
+    },
+    "ACCEPT" => at::Input {
+        targets: vec![Box::new(at::Unit)],
+        source: None,
+        options: vec!["accept".to_string()]
+    }
+}
+
+// Control structures
 ControlStruct: at = {
     IfThen,
     IfElseThen,
@@ -390,7 +434,7 @@ ControlStruct: at = {
 IfThen: at = {
     "IF" <then:WordBody> "THEN" => at::If {
         condition: Box::new(at::Unit),
-        then: Box::new(at::ForthSequence { words: then }),
+        then: Box::new(at::Block { statements: then }),
         els: Box::new(at::Unit)
     }
 }
@@ -399,34 +443,50 @@ IfThen: at = {
 IfElseThen: at = {
     "IF" <then:WordBody> "ELSE" <els:WordBody> "THEN" => at::If {
         condition: Box::new(at::Unit),
-        then: Box::new(at::ForthSequence { words: then }),
-        els: Box::new(at::ForthSequence { words: els })
+        then: Box::new(at::Block { statements: then }),
+        els: Box::new(at::Block { statements: els })
     }
 }
 
-// BEGIN ... UNTIL - Forth-specific
+// BEGIN ... UNTIL - uses generic DoLoop with until_cond
 BeginUntil: at = {
-    "BEGIN" <body:WordBody> "UNTIL" => at::ForthBeginUntil {
-        body,
-        condition: Box::new(at::Unit)
+    "BEGIN" <body:WordBody> "UNTIL" => at::DoLoop {
+        loop_var: None,
+        start: None,
+        end: None,
+        by: None,
+        while_cond: None,
+        until_cond: Some(Box::new(at::Unit)),
+        body
     }
 }
 
-// BEGIN ... WHILE ... REPEAT - Forth-specific
+// BEGIN ... WHILE ... REPEAT - uses generic DoLoop with while_cond
 BeginWhileRepeat: at = {
-    "BEGIN" <while_body:WordBody> "WHILE" <repeat_body:WordBody> "REPEAT" => at::ForthBeginWhileRepeat {
-        condition: Box::new(at::Unit),
-        while_body,
-        repeat_body
+    "BEGIN" <while_body:WordBody> "WHILE" <repeat_body:WordBody> "REPEAT" => at::DoLoop {
+        loop_var: None,
+        start: None,
+        end: None,
+        by: None,
+        while_cond: Some(Box::new(at::Unit)),
+        until_cond: None,
+        body: {
+            let mut combined = while_body;
+            combined.extend(repeat_body);
+            combined
+        }
     }
 }
 
-// BEGIN ... AGAIN - Forth-specific
+// BEGIN ... AGAIN - uses generic Loop
 BeginAgain: at = {
-    "BEGIN" <body:WordBody> "AGAIN" => at::ForthBeginAgain { body }
+    "BEGIN" <body:WordBody> "AGAIN" => at::Loop { 
+        name: None, 
+        body 
+    }
 }
 
-// DO ... LOOP - now uses generic DoLoop
+// DO ... LOOP - uses generic DoLoop
 DoLoop: at = {
     "DO" <body:WordBody> "LOOP" => at::DoLoop {
         loop_var: None,
@@ -439,7 +499,7 @@ DoLoop: at = {
     }
 }
 
-// DO ... +LOOP - now uses generic DoLoop with increment
+// DO ... +LOOP - uses generic DoLoop with increment
 DoPlusLoop: at = {
     "DO" <body:WordBody> "+LOOP" => at::DoLoop {
         loop_var: None,
@@ -452,7 +512,7 @@ DoPlusLoop: at = {
     }
 }
 
-// CASE ... ENDCASE - now uses generic Case node
+// CASE ... ENDCASE - uses generic Case node
 CaseStruct: at = {
     "CASE" <clauses:OfClauses> "ENDCASE" => at::Case {
         expr: Box::new(at::Unit),
@@ -462,7 +522,7 @@ CaseStruct: at = {
     "CASE" <clauses:OfClauses> <default:WordBody> "ENDCASE" => at::Case {
         expr: Box::new(at::Unit),
         cases: clauses,
-        default_case: Some(Box::new(at::ForthSequence { words: default }))
+        default_case: Some(Box::new(at::Block { statements: default }))
     }
 }
 
@@ -476,7 +536,7 @@ OfClauses: Vec<Box<at>> = {
     }
 }
 
-// OF ... ENDOF clause body - now uses generic CaseBranch
+// OF ... ENDOF clause - uses generic CaseBranch
 OfClause: at = {
     "OF" <body:WordBody> "ENDOF" => at::CaseBranch {
         pattern: Box::new(at::Unit),
